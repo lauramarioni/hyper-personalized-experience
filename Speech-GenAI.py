@@ -3,8 +3,12 @@ import openai
 from gtts import gTTS
 import os
 
-# Set up OpenAI API key
-openai.api_key = "YOUR_OPENAI_API_KEY"
+# Load the .env file
+load_dotenv()
+ 
+# Get the API key
+openai_key = os.environ.get("OPENAI_KEY")
+openai.api_key = openai_key
 
 # Function to interact with GenAI for chatbot responses
 def chat_with_genai(prompt):
