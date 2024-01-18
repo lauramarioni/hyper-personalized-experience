@@ -1,51 +1,46 @@
 import streamlit as st
-import requests
+import openai
+from gtts import gTTS
+import os
 
-# Function to send text to the genAI API for speech synthesis
-def synthesize_speech_with_genai(text):
-    genai_api_url = "https://api.genai.com/speech-synthesis"
-    genai_api_key = "YOUR_GENAI_API_KEY"  # Replace with your actual genAI API key
+# Set up OpenAI API key
+openai.api_key = "YOUR_OPENAI_API_KEY"
 
-    headers = {
-        "Authorization": f"Bearer {genai_api_key}",
-        "Content-Type": "application/json",
-    }
+# Function to interact with GenAI for chatbot responses
+def chat_with_genai(prompt):
+    response = openai.Completion.create(
+        engine="text-davinci-002",
+        prompt=prompt,
+        max_tokens=150,
+        temperature=0.7,
+    )
+    return response.choices[0].text.strip()
 
-    data = {
-        "text": text,
-    }
-
-    response = requests.post(genai_api_url, headers=headers, json=data)
-
-    if response.status_code == 200:
-        result = response.json()
-        return result.get("audio_url", None)
-    else:
-        st.error(f"Error: {response.status_code} - {response.text}")
-        return None
+# Function to convert text to speech using gTTS
+def text_to_speech(text, language="en"):
+    tts = gTTS(text=text, lang=language, slow=False)
+    tts.save("output.mp3")
+    os.system("start output.mp3")  # Windows command, use appropriate command for other platforms
 
 # Streamlit app
 def main():
-    st.title("Speech Synthesis with genAI")
+    st.title("GenAI Chatbot with Speech Synthesis")
 
-    # Input text
-    text_to_synthesize = st.text_area("Enter text for speech synthesis", "")
+    # User input
+    user_input = st.text_input("Ask the chatbot:")
 
-    # Button to trigger speech synthesis
-    if st.button("Synthesize Speech"):
-        if text_to_synthesize:
-            st.info("Synthesizing speech...")
+    if st.button("Ask"):
+        # Get GenAI response
+        genai_response = chat_with_genai(user_input)
 
-            # Call genAI API for speech synthesis
-            audio_url = synthesize_speech_with_genai(text_to_synthesize)
+        # Display GenAI response
+        st.text("GenAI Response:")
+        st.write(genai_response)
 
-            if audio_url:
-                st.audio(audio_url, format="audio/wav", start_time=0)
-                st.success("Speech synthesis complete!")
-            else:
-                st.error("Failed to synthesize speech.")
-        else:
-            st.warning("Please enter text for speech synthesis.")
+        # Convert GenAI response to speech
+        st.text("Speech Synthesis:")
+        text_to_speech(genai_response)
 
+# Run the Streamlit app
 if __name__ == "__main__":
     main()
