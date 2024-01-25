@@ -1,83 +1,148 @@
-# Copyright (c) Streamlit Inc. (2018-2022) Snowflake Inc. (2022)
-# Ciao
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+import streamlit as st
+import websockets
+import asyncio
+import base64
+import json
+import pyaudio
+import os
+from pathlib import Path
 
-# import streamlit as st
-# from streamlit.logger import get_logger
+# Session state
+if 'text' not in st.session_state:
+	st.session_state['text'] = 'Listening...'
+	st.session_state['run'] = False
 
-# LOGGER = get_logger(__name__)
+# Audio parameters 
+st.sidebar.header('Audio Parameters')
 
+FRAMES_PER_BUFFER = int(st.sidebar.text_input('Frames per buffer', 3200))
+FORMAT = pyaudio.paInt16
+CHANNELS = 1
+RATE = int(st.sidebar.text_input('Rate', 16000))
+p = pyaudio.PyAudio()
 
-# def run():
-#     st.set_page_config(
-#         page_title="Hello",
-#         page_icon="👋",
-#     )
-
-#     st.write("# Welcome to Streamlit! 👋")
-
-#     st.sidebar.success("Select a demo above.")
-
-#     st.markdown(
-#         """
-#         CIAOOOOOOOO
-#         Streamlit is an open-source app framework built specifically for
-#         Machine Learning and Data Science projects.
-#         **👈 Select a demo from the sidebar** to see some examples
-#         of what Streamlit can do!
-#         ### Want to learn more?
-#         - Check out [streamlit.io](https://streamlit.io)
-#         - Jump into our [documentation](https://docs.streamlit.io)
-#         - Ask a question in our [community
-#           forums](https://discuss.streamlit.io)
-#         ### See more complex demos
-#         - Use a neural net to [analyze the Udacity Self-driving Car Image
-#           Dataset](https://github.com/streamlit/demo-self-driving)
-#         - Explore a [New York City rideshare dataset](https://github.com/streamlit/demo-uber-nyc-pickups)
-#     """
-#     )
-
-
-# if __name__ == "__main__":
-#     run()
-
-# Second
-import streamlit as st 
-import anthropic
-with st.sidebar:
-    anthropic_api_key = st.text_input("Anthropic API Key", key="file_qa_api_key", type="password")
-    "[View the source code](https://github.com/streamlit/llm-examples/blob/main/pages/1_File_Q%26A.py)"
-    "[![Open in GitHub Codespaces](https://github.com/codespaces/badge.svg)](https://codespaces.new/streamlit/llm-examples?quickstart=1)"
-
-st.title("📝 File Q&A with Anthropic") uploaded_file = st.file_uploader("Upload an article", type=("txt", "md")) question = st.text_input(
-    "Ask something about the article",
-    placeholder="Can you give me a short summary?",
-    disabled=not uploaded_file,
+# Open an audio stream with above parameter settings
+stream = p.open(
+   format=FORMAT,
+   channels=CHANNELS,
+   rate=RATE,
+   input=True,
+   frames_per_buffer=FRAMES_PER_BUFFER
 )
-if uploaded_file and question and not anthropic_api_key:
-    st.info("Please add your Anthropic API key to continue.")
 
-if uploaded_file and question and anthropic_api_key:
-    article = uploaded_file.read().decode()
-    prompt = f"""{anthropic.HUMAN_PROMPT} Here's an article:\n\n
-    {article}\n\n\n\n{question}{anthropic.AI_PROMPT}"""
+# Start/stop audio transmission
+def start_listening():
+	st.session_state['run'] = True
 
-    client = anthropic.Client(api_key=anthropic_api_key)
-    response = client.completions.create(
-        prompt=prompt,
-        stop_sequences=[anthropic.HUMAN_PROMPT],
-        model="claude-v1", #"claude-2" for Claude 2 model
-        max_tokens_to_sample=100,
-    )
-    st.write("### Answer")
-    st.write(response.completion)
+def download_transcription():
+	read_txt = open('transcription.txt', 'r')
+	st.download_button(
+		label="Download transcription",
+		data=read_txt,
+		file_name='transcription_output.txt',
+		mime='text/plain')
+
+def stop_listening():
+	st.session_state['run'] = False
+
+# Web user interface
+st.title('🎙️ Real-Time Transcription App')
+
+with st.expander('About this App'):
+	st.markdown('''
+	This Streamlit app uses the AssemblyAI API to perform real-time transcription.
+	
+	Libraries used:
+	- `streamlit` - web framework
+	- `pyaudio` - a Python library providing bindings to [PortAudio](http://www.portaudio.com/) (cross-platform audio processing library)
+	- `websockets` - allows interaction with the API
+	- `asyncio` - allows concurrent input/output processing
+	- `base64` - encode/decode audio data
+	- `json` - allows reading of AssemblyAI audio output in JSON format
+	''')
+
+col1, col2 = st.columns(2)
+
+col1.button('Start', on_click=start_listening)
+col2.button('Stop', on_click=stop_listening)
+
+# Send audio (Input) / Receive transcription (Output)
+async def send_receive():
+	URL = f"wss://api.assemblyai.com/v2/realtime/ws?sample_rate={RATE}"
+
+	print(f'Connecting websocket to url ${URL}')
+
+	async with websockets.connect(
+		URL,
+		extra_headers=(("Authorization", st.secrets['api_key']),),
+		ping_interval=5,
+		ping_timeout=20
+	) as _ws:
+
+		r = await asyncio.sleep(0.1)
+		print("Receiving messages ...")
+
+		session_begins = await _ws.recv()
+		print(session_begins)
+		print("Sending messages ...")
+
+
+		async def send():
+			while st.session_state['run']:
+				try:
+					data = stream.read(FRAMES_PER_BUFFER)
+					data = base64.b64encode(data).decode("utf-8")
+					json_data = json.dumps({"audio_data":str(data)})
+					r = await _ws.send(json_data)
+
+				except websockets.exceptions.ConnectionClosedError as e:
+					print(e)
+					assert e.code == 4008
+					break
+
+				except Exception as e:
+					print(e)
+					assert False, "Not a websocket 4008 error"
+
+				r = await asyncio.sleep(0.01)
+
+
+		async def receive():
+			while st.session_state['run']:
+				try:
+					result_str = await _ws.recv()
+					result = json.loads(result_str)['text']
+
+					if json.loads(result_str)['message_type']=='FinalTranscript':
+						print(result)
+						st.session_state['text'] = result
+						st.write(st.session_state['text'])
+
+						transcription_txt = open('transcription.txt', 'a')
+						transcription_txt.write(st.session_state['text'])
+						transcription_txt.write(' ')
+						transcription_txt.close()
+
+
+				except websockets.exceptions.ConnectionClosedError as e:
+					print(e)
+					assert e.code == 4008
+					break
+
+				except Exception as e:
+					print(e)
+					assert False, "Not a websocket 4008 error"
+			
+		send_result, receive_result = await asyncio.gather(send(), receive())
+
+
+asyncio.run(send_receive())
+
+if Path('transcription.txt').is_file():
+	st.markdown('### Download')
+	download_transcription()
+	os.remove('transcription.txt')
+
+# References (Code modified and adapted from the following)
+# 1. https://github.com/misraturp/Real-time-transcription-from-microphone
+# 2. https://medium.com/towards-data-science/real-time-speech-recognition-python-assemblyai-13d35eeed226
